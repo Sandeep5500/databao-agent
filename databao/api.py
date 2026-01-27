@@ -2,11 +2,13 @@ from databao.caches.in_mem_cache import InMemCache
 from databao.configs.agent import DEFAULT_AGENT_CONFIG, AgentConfig
 from databao.configs.llm import LLMConfig, LLMConfigDirectory
 from databao.core import Agent, Cache, Executor, Visualizer
+from databao.core.context import Context
 from databao.executors.lighthouse.executor import LighthouseExecutor
 from databao.visualizers.vega_chat import VegaChatVisualizer
 
 
-def new_agent(
+def agent(
+    context: Context,
     name: str | None = None,
     llm_config: LLMConfig | None = None,
     agent_config: AgentConfig | None = None,
@@ -25,6 +27,7 @@ def new_agent(
     llm_config = llm_config if llm_config else LLMConfigDirectory.DEFAULT
     agent_config = agent_config if agent_config else DEFAULT_AGENT_CONFIG
     return Agent(
+        context,
         llm_config,
         agent_config,
         name=name or "default_agent",
