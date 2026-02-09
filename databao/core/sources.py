@@ -1,27 +1,29 @@
 from pathlib import Path
 from typing import Any
 
-from databao_context_engine.datasources.types import PreparedConfig, PreparedDatasource
+from databao_context_engine.datasources.types import DatasourceId, PreparedConfig, PreparedDatasource
 from pandas import DataFrame
 
-from databao.core.data_source import DBDataSource, DFDataSource, Sources
+from databao.core.data_source import DataSource, DBDataSource, DFDataSource, Sources
 from databao.databases import DBConnectionConfig
 
 
 class SourcesManager:
     def __init__(self, prepared_data_sources: list[PreparedDatasource] | None = None):
-        self._sources: Sources = Sources(dfs={}, dbs={}, additional_context=[])
+        self._sources: Sources = Sources(dfs={}, dbs={}, additional_context=[], configured={})
         self._add_prepared_ds(prepared_data_sources)
 
     def _add_prepared_ds(self, prepared_data_sources: list[PreparedDatasource] | None) -> None:
         if prepared_data_sources is None:
             return
-        for ds in prepared_data_sources:
-            if isinstance(ds, PreparedConfig):
-                type = ds.datasource_type
-                content = self._get_config_content(ds)
-                name = ds.datasource_name
-                self.add_db(DBConnectionConfig(type, content), name=name)
+        for prepared_ds in prepared_data_sources:
+            if isinstance(prepared_ds, PreparedConfig):
+                id = prepared_ds.datasource_id
+                type = prepared_ds.datasource_type
+                content = self._get_config_content(prepared_ds)
+                name = prepared_ds.datasource_name
+                ds = self.add_db(DBConnectionConfig(type, content), name=name)
+                self.add_configuration(id, ds)
             else:
                 raise ValueError("Only PreparedConfig is supported")
 
@@ -49,6 +51,9 @@ class SourcesManager:
         if text is None:
             raise ValueError("Invalid context provided.")
         self._sources.additional_context.append(text)
+
+    def add_configuration(self, ds_id: DatasourceId, ds: DataSource) -> None:
+        self._sources.configured[ds_id] = ds
 
     @property
     def sources(self) -> Sources:

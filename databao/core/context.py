@@ -77,7 +77,10 @@ class ContextBuilder:
         db_source = self._sources_manager.add_db(config, name=name, context=context)
 
         if self._dce_project is not None:
-            self._dce_project.create_datasource_config(config.type, db_source.name, config.content)
+            db_file = self._dce_project.create_datasource_config(config.type, db_source.name, config.content)
+            db_id = db_file.datasource_id
+            self._sources_manager.add_configuration(db_id, db_source)
+
         return self
 
     def add_df(self, df: DataFrame, *, name: str | None = None, context: str | Path | None = None) -> ContextBuilder:
