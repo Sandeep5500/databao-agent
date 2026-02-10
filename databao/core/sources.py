@@ -6,6 +6,7 @@ from pandas import DataFrame
 
 from databao.core.data_source import DataSource, DBDataSource, DFDataSource, Sources
 from databao.databases import DBConnectionConfig
+from databao.databases.databases import to_agent_config_content
 
 
 class SourcesManager:
@@ -60,8 +61,8 @@ class SourcesManager:
         return self._sources
 
     @staticmethod
-    def _get_config_content(ds: PreparedConfig) -> dict[str, Any]:
-        return {str(k): v for k, v in ds.config.items()}
+    def _get_config_content(dce_config: PreparedConfig) -> dict[str, Any]:
+        return to_agent_config_content(dce_config)
 
     @staticmethod
     def _parse_context_arg(context: str | Path | None) -> str | None:

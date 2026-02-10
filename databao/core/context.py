@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from databao_context_engine import ContextSearchResult
 from pandas import DataFrame
@@ -9,6 +10,7 @@ from pandas import DataFrame
 from databao.core.data_source import Sources
 from databao.core.sources import SourcesManager
 from databao.databases import DBConnection, DBConnectionConfig, DBConnectionRuntime, convert_to_config
+from databao.databases.databases import to_dce_config_content
 from databao.integrations.dce import DatabaoContextApi, DatabaoContextEngineApi
 
 
@@ -77,7 +79,8 @@ class ContextBuilder:
         db_source = self._sources_manager.add_db(config, name=name, context=context)
 
         if self._dce_project is not None:
-            db_file = self._dce_project.create_datasource_config(config.type, db_source.name, config.content)
+            db_dce_config_content = self._get_dce_config_content(config)
+            db_file = self._dce_project.create_datasource_config(config.type, db_source.name, db_dce_config_content)
             db_id = db_file.datasource_id
             self._sources_manager.add_configuration(db_id, db_source)
 
@@ -117,6 +120,10 @@ class ContextBuilder:
             dce = None
         sources = self._sources_manager.sources
         return Context(_dce=dce, _sources=sources)
+
+    @staticmethod
+    def _get_dce_config_content(config: DBConnectionConfig) -> dict[str, Any]:
+        return to_dce_config_content(config)
 
     @staticmethod
     def _convert_to_config(run_conn: DBConnectionRuntime) -> DBConnectionConfig:
