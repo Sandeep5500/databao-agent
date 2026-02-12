@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
 import pandas as pd
-from databao_context_engine import DatasourceId
 
 from databao.databases import DBConnection
 
@@ -27,4 +26,3 @@ class Sources:
     dfs: dict[str, DFDataSource]
     dbs: dict[str, DBDataSource]
     additional_context: list[str]
-    configured: dict[DatasourceId, DataSource]

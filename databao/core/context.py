@@ -40,8 +40,8 @@ class Context:
     def load(project_dir: Path) -> Context:
         dce_project = DatabaoContextApi.get_dce_project(project_dir)
         dce = DatabaoContextApi.get_dce(project_dir)
-        prepared_data_sources = dce_project.get_prepared_datasource_list()
-        sources_manager = SourcesManager(prepared_data_sources)
+        configured_data_sources = dce_project.get_configured_datasource_list()
+        sources_manager = SourcesManager(configured_data_sources)
         return Context(_dce=dce, _sources=sources_manager.sources)
 
 
@@ -80,9 +80,7 @@ class ContextBuilder:
 
         if self._dce_project is not None:
             db_dce_config_content = self._get_dce_config_content(config)
-            db_file = self._dce_project.create_datasource_config(config.type, db_source.name, db_dce_config_content)
-            db_id = db_file.datasource_id
-            self._sources_manager.add_configuration(db_id, db_source)
+            self._dce_project.create_datasource_config(config.type, db_source.name, db_dce_config_content)
 
         return self
 

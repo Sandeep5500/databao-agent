@@ -1,8 +1,7 @@
 from typing import Any
 
 from _duckdb import DuckDBPyConnection
-from databao_context_engine import DatasourceType
-from databao_context_engine.datasources.types import PreparedConfig
+from databao_context_engine import ConfiguredDatasource, DatasourceType
 
 from databao.databases.database_adapter import DatabaseAdapter
 from databao.databases.database_connection import DBConnectionConfig, DBConnectionRuntime
@@ -40,8 +39,8 @@ def to_dce_config_content(config: DBConnectionConfig) -> dict[str, Any]:
 
 
 # TODO (dce): use DCE config instead
-def to_agent_config_content(dce_config: PreparedConfig) -> dict[str, Any]:
-    dce_content = {str(k): v for k, v in dce_config.config.items()}
+def to_agent_config_content(dce_ds: ConfiguredDatasource) -> dict[str, Any]:
+    dce_content = {str(k): v for k, v in dce_ds.config.items()}
     connection = dce_content.get("connection")
     if connection is None:
         raise ValueError("Cannot convert DCE config to Agent config: missing 'connection' key")

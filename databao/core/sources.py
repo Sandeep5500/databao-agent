@@ -1,32 +1,29 @@
 from pathlib import Path
 from typing import Any
 
-from databao_context_engine.datasources.types import DatasourceId, PreparedConfig, PreparedDatasource
+from databao_context_engine import ConfiguredDatasource
 from pandas import DataFrame
 
-from databao.core.data_source import DataSource, DBDataSource, DFDataSource, Sources
+from databao.core.data_source import DBDataSource, DFDataSource, Sources
 from databao.databases import DBConnectionConfig
 from databao.databases.databases import to_agent_config_content
 
 
 class SourcesManager:
-    def __init__(self, prepared_data_sources: list[PreparedDatasource] | None = None):
-        self._sources: Sources = Sources(dfs={}, dbs={}, additional_context=[], configured={})
-        self._add_prepared_ds(prepared_data_sources)
+    def __init__(self, configured_data_sources: list[ConfiguredDatasource] | None = None):
+        self._sources: Sources = Sources(dfs={}, dbs={}, additional_context=[])
+        self._add_configured_ds(configured_data_sources)
 
-    def _add_prepared_ds(self, prepared_data_sources: list[PreparedDatasource] | None) -> None:
-        if prepared_data_sources is None:
+    def _add_configured_ds(self, configured_data_sources: list[ConfiguredDatasource] | None) -> None:
+        if configured_data_sources is None:
             return
-        for prepared_ds in prepared_data_sources:
-            if isinstance(prepared_ds, PreparedConfig):
-                id = prepared_ds.datasource_id
-                type = prepared_ds.datasource_type
-                content = self._get_config_content(prepared_ds)
-                name = prepared_ds.datasource_name
-                ds = self.add_db(DBConnectionConfig(type, content), name=name)
-                self.add_configuration(id, ds)
-            else:
-                raise ValueError("Only PreparedConfig is supported")
+        for configured_ds in configured_data_sources:
+            if configured_ds.config is None:
+                raise ValueError("Only configurable datasources are supported")
+            type = configured_ds.datasource.type
+            name = self._get_ds_name(configured_ds)
+            content = self._get_config_content(configured_ds)
+            self.add_db(DBConnectionConfig(type, content), name=name)
 
     def add_db(
         self, config: DBConnectionConfig, *, name: str | None = None, context: str | Path | None = None
@@ -53,16 +50,19 @@ class SourcesManager:
             raise ValueError("Invalid context provided.")
         self._sources.additional_context.append(text)
 
-    def add_configuration(self, ds_id: DatasourceId, ds: DataSource) -> None:
-        self._sources.configured[ds_id] = ds
-
     @property
     def sources(self) -> Sources:
         return self._sources
 
+    # TODO (dce): should be provided by the DCE side
     @staticmethod
-    def _get_config_content(dce_config: PreparedConfig) -> dict[str, Any]:
-        return to_agent_config_content(dce_config)
+    def _get_ds_name(dce_ds: ConfiguredDatasource) -> str:
+        id = dce_ds.datasource.id
+        return str(id.datasource_path).split("/")[-1]
+
+    @staticmethod
+    def _get_config_content(dce_ds: ConfiguredDatasource) -> dict[str, Any]:
+        return to_agent_config_content(dce_ds)
 
     @staticmethod
     def _parse_context_arg(context: str | Path | None) -> str | None:
