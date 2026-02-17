@@ -1,6 +1,6 @@
 import uuid
 from copy import copy
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, TextIO
 
 from pandas import DataFrame
 
@@ -29,6 +29,8 @@ class Thread:
         stream_plot: bool = False,
         lazy: bool = False,
         auto_output_modality: bool = True,
+        cache_scope: str | None = None,
+        writer: TextIO | None = None,
     ):
         self._agent = agent
         self._default_rows_limit = rows_limit
@@ -60,7 +62,11 @@ class Thread:
         self._meta: dict[str, Any] = {}
 
         # A unique cache scope so executors can store per-thread state (e.g., message history)
-        self._cache_scope = f"{self._agent.name}/{uuid.uuid4()}"
+        # If cache_scope is provided, use it to restore a previous session
+        self._cache_scope = cache_scope if cache_scope else f"{self._agent.name}/{uuid.uuid4()}"
+
+        # Optional per-thread writer for streaming output
+        self._writer = writer
 
     def _materialize_data(self, rows_limit: int | None) -> "ExecutionResult":
         """Materialize the latest data state by executing pending OPAs if needed."""
@@ -77,6 +83,7 @@ class Thread:
                     context=self._agent.context,
                     rows_limit=rows_limit,
                     stream=stream,
+                    writer=self._writer,
                 )
                 self._meta.update(self._data_result.meta)
             self._opas_processed_count += len(new_opas)

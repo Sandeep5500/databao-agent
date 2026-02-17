@@ -1,7 +1,7 @@
 import base64
 import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TextIO
 
 from pandas import DataFrame
 from pydantic import BaseModel, ConfigDict
@@ -166,6 +166,7 @@ class Executor(ABC):
         *,
         rows_limit: int = 100,
         stream: bool = True,
+        writer: TextIO | None = None,
     ) -> ExecutionResult:
         """Execute a single OPA within an agent.
 
@@ -177,5 +178,7 @@ class Executor(ABC):
             context: Context of the agent with data sources.
             rows_limit: Preferred row limit for data materialization (may be ignored by executors).
             stream: Stream LLM output to stdout.
+            writer: Optional TextIO for streaming output. If provided, streaming
+                output will be written to this writer instead of stdout.
         """
         pass

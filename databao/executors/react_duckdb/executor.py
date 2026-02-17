@@ -1,7 +1,8 @@
 import logging
-from typing import Any
+from typing import Any, TextIO
 
 import duckdb
+from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy import Connection, Engine
@@ -51,6 +52,18 @@ class ReactDuckDBExecutor(GraphExecutor):
         else:
             raise ValueError("Only DuckDB or SQLAlchemy connections are supported.")
 
+    def drop_last_opa_group(self, cache: Cache, n: int = 1) -> None:
+        """Drop last n groups of operations from the message history."""
+        messages = cache.get("state", default={}).get("messages", [])
+        human_messages = [m for m in messages if isinstance(m, HumanMessage)]
+        if len(human_messages) < n:
+            raise ValueError(f"Cannot drop last {n} operations - only {len(human_messages)} operations found.")
+        c = 0
+        while c < n:
+            m = messages.pop()
+            if isinstance(m, HumanMessage):
+                c += 1
+
     def register_df(self, source: DFDataSource) -> None:
         self._duckdb_connection.register(source.name, source.df)
 
@@ -64,6 +77,7 @@ class ReactDuckDBExecutor(GraphExecutor):
         *,
         rows_limit: int = 100,
         stream: bool = True,
+        writer: TextIO | None = None,
     ) -> ExecutionResult:
         # Get or create graph (cached after first use)
         compiled_graph = self._compiled_graph or self._create_graph(self._duckdb_connection, llm_config, context)
@@ -74,7 +88,9 @@ class ReactDuckDBExecutor(GraphExecutor):
         # Execute the graph
         init_state = {"messages": messages}
         invoke_config = RunnableConfig(recursion_limit=agent_config.recursion_limit)
-        last_state = self._invoke_graph_sync(compiled_graph, init_state, config=invoke_config, stream=stream)
+        last_state = self._invoke_graph_sync(
+            compiled_graph, init_state, config=invoke_config, stream=stream, writer=writer
+        )
         answer: AgentResponse = last_state["structured_response"]
         logger.info("Generated query: %s", answer.sql)
         df = execute_duckdb_sql(answer.sql, self._duckdb_connection, limit=rows_limit)

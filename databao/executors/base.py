@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import Any
+from typing import Any, TextIO
 
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
@@ -21,6 +21,10 @@ class GraphExecutor(Executor, ABC):
     Base class for LangGraph executors that execute with a DuckDB connection and LLM configuration.
     Provides common functionality for graph caching, message handling, and OPA processing.
     """
+
+    def __init__(self) -> None:
+        """Initialize agent with graph caching infrastructure."""
+        self._graph_recursion_limit = 50
 
     def _process_opas(self, opas: list[Opa], cache: Cache) -> list[Any]:
         """
@@ -55,11 +59,14 @@ class GraphExecutor(Executor, ABC):
         *,
         config: RunnableConfig | None = None,
         stream: bool = True,
+        writer: TextIO | None = None,
         **kwargs: Any,
     ) -> Any:
         """Invoke the graph with the given start state and return the output state."""
         if stream:
-            return GraphExecutor._execute_stream_sync(compiled_graph, start_state, config=config, **kwargs)
+            return GraphExecutor._execute_stream_sync(
+                compiled_graph, start_state, config=config, writer=writer, **kwargs
+            )
         else:
             return compiled_graph.invoke(start_state, config=config)
 
@@ -69,9 +76,10 @@ class GraphExecutor(Executor, ABC):
         start_state: Any,
         *,
         config: RunnableConfig | None = None,
+        writer: TextIO | None = None,
         **kwargs: Any,
     ) -> Any:
-        writer = TextStreamFrontend(start_state)
+        frontend = TextStreamFrontend(start_state, writer=writer)
         last_state = None
         async for mode, chunk in compiled_graph.astream(
             start_state,
@@ -79,10 +87,10 @@ class GraphExecutor(Executor, ABC):
             config=config,
             **kwargs,
         ):
-            writer.write_stream_chunk(mode, chunk)
+            frontend.write_stream_chunk(mode, chunk)
             if mode == "values":
                 last_state = chunk
-        writer.end()
+        frontend.end()
         assert last_state is not None
         return last_state
 
@@ -92,9 +100,10 @@ class GraphExecutor(Executor, ABC):
         start_state: Any,
         *,
         config: RunnableConfig | None = None,
+        writer: TextIO | None = None,
         **kwargs: Any,
     ) -> Any:
-        writer = TextStreamFrontend(start_state)
+        frontend = TextStreamFrontend(start_state, writer=writer)
         last_state = None
         for mode, chunk in compiled_graph.stream(
             start_state,
@@ -102,9 +111,9 @@ class GraphExecutor(Executor, ABC):
             config=config,
             **kwargs,
         ):
-            writer.write_stream_chunk(mode, chunk)
+            frontend.write_stream_chunk(mode, chunk)
             if mode == "values":
                 last_state = chunk
-        writer.end()
+        frontend.end()
         assert last_state is not None
         return last_state

@@ -26,12 +26,14 @@ def agent(
     """
     llm_config = llm_config if llm_config else LLMConfigDirectory.DEFAULT
     agent_config = agent_config if agent_config else DEFAULT_AGENT_CONFIG
+    data_executor = data_executor or LighthouseExecutor()
+
     return Agent(
         context,
         llm_config,
         agent_config,
         name=name or "default_agent",
-        data_executor=data_executor or LighthouseExecutor(),
+        data_executor=data_executor,
         visualizer=visualizer or VegaChatVisualizer(llm_config),
         cache=cache or InMemCache(),
         rows_limit=rows_limit,
