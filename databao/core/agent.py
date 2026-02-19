@@ -61,7 +61,8 @@ class Agent:
     def _init_executor(self) -> None:
         self.__domain.finalize_sources()
         for db_source in self.sources.dbs.values():
-            self.executor.register_db(db_source)
+            if db_source.connectable:
+                self.executor.register_db(db_source)
         for df_source in self.sources.dfs.values():
             self.executor.register_df(df_source)
 

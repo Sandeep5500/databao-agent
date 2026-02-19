@@ -24,6 +24,11 @@ def supported_db_types() -> list[DatasourceType]:
     return [adapter.type() for adapter in DATABASE_ADAPTERS]
 
 
+def is_connectable(datasource_type: DatasourceType) -> bool:
+    """Check whether a datasource type has a registered adapter that can open a connection."""
+    return any(adapter.type() == datasource_type for adapter in DATABASE_ADAPTERS)
+
+
 # TODO (dce): use DCE config instead
 def to_dce_config_content(config: DBConnectionConfig) -> dict[str, Any]:
     type = config.type
@@ -43,7 +48,8 @@ def to_agent_config_content(dce_ds: ConfiguredDatasource) -> dict[str, Any]:
     dce_content = {str(k): v for k, v in dce_ds.config.items()}
     connection = dce_content.get("connection")
     if connection is None:
-        raise ValueError("Cannot convert DCE config to Agent config: missing 'connection' key")
+        # NOTE: (@gas) Return the raw config content as-is for sources like dbt
+        return dce_content
     connection = {str(k): v for k, v in connection.items()}
     additional_properties = connection.pop("additional_properties", {})
     return {**connection, **additional_properties}
@@ -66,4 +72,4 @@ def register_in_duckdb(shared: DuckDBPyConnection, conn: DBConnectionConfig, nam
             adapter.register_in_duckdb(shared, conn, name)
             return
 
-    # raise ValueError("Cannot register connection in DuckDB")
+    # raise ValueError(f"Cannot register connection of type '{conn.type}' in DuckDB — no matching adapter found")

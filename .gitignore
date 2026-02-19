@@ -15,6 +15,10 @@ dist/
 .idea/
 .ipynb_checkpoints/
 
+.memo
+examples/shopify001/
+examples/shopify002/
+
 # Client build artifacts
 client/out
 

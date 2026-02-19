@@ -19,6 +19,7 @@ class DFDataSource(DataSource):
 @dataclass
 class DBDataSource(DataSource):
     config: DBConnectionConfig
+    connectable: bool = True
 
 
 @dataclass

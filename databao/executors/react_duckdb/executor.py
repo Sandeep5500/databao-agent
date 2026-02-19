@@ -1,7 +1,6 @@
 import logging
 from typing import Any, TextIO
 
-import duckdb
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
@@ -9,9 +8,7 @@ from langgraph.graph.state import CompiledStateGraph
 from databao.configs.agent import AgentConfig
 from databao.configs.llm import LLMConfig
 from databao.core import Cache, Domain, ExecutionResult, Opa
-from databao.core.data_source import DBDataSource, DFDataSource
 from databao.core.executor import OutputModalityHints
-from databao.databases import register_in_duckdb
 from databao.duckdb.react_tools import AgentResponse, execute_duckdb_sql, make_react_duckdb_agent
 from databao.executors.base import GraphExecutor
 
@@ -19,19 +16,14 @@ logger = logging.getLogger(__name__)
 
 
 class ReactDuckDBExecutor(GraphExecutor):
-    def __init__(self) -> None:
+    def __init__(self, writer: Any = None) -> None:
         """Initialize agent with lazy graph compilation."""
-        super().__init__()
-        self._duckdb_connection = duckdb.connect(":memory:")
+        super().__init__(writer=writer)
         self._compiled_graph: CompiledStateGraph[Any] | None = None
 
     def _create_graph(self, data_connection: Any, llm_config: LLMConfig, domain: Domain) -> CompiledStateGraph[Any]:
         """Create and compile the ReAct DuckDB agent graph."""
         return make_react_duckdb_agent(data_connection, llm_config.new_chat_model(), domain)
-
-    def register_db(self, source: DBDataSource) -> None:
-        """Register DB in the DuckDB connection."""
-        register_in_duckdb(self._duckdb_connection, source.config, source.name)
 
     def drop_last_opa_group(self, cache: Cache, n: int = 1) -> None:
         """Drop last n groups of operations from the message history."""
@@ -44,9 +36,6 @@ class ReactDuckDBExecutor(GraphExecutor):
             m = messages.pop()
             if isinstance(m, HumanMessage):
                 c += 1
-
-    def register_df(self, source: DFDataSource) -> None:
-        self._duckdb_connection.register(source.name, source.df)
 
     def execute(
         self,

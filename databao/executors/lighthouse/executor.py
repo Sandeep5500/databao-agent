@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Any, TextIO, cast
 
-import duckdb
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
@@ -9,10 +8,8 @@ from langgraph.graph.state import CompiledStateGraph
 from databao.configs import LLMConfig
 from databao.configs.agent import AgentConfig
 from databao.core import Cache, Domain, ExecutionResult, Opa
-from databao.core.data_source import DBDataSource, DFDataSource
 from databao.core.domain import _Domain
 from databao.core.executor import OutputModalityHints
-from databao.databases import register_in_duckdb
 from databao.duckdb.utils import describe_duckdb_schema
 from databao.executors.base import GraphExecutor
 from databao.executors.lighthouse.graph import ExecuteSubmit
@@ -21,12 +18,9 @@ from databao.executors.lighthouse.utils import get_today_date_str, read_prompt_t
 
 
 class LighthouseExecutor(GraphExecutor):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, writer: Any = None) -> None:
+        super().__init__(writer=writer)
         self._prompt_template = read_prompt_template(Path("system_prompt.jinja"))
-
-        # Create a DuckDB connection for the agent
-        self._duckdb_connection = duckdb.connect(":memory:")
         self._graph: ExecuteSubmit = ExecuteSubmit(self._duckdb_connection)
         self._compiled_graph: CompiledStateGraph[Any] | None = None
 
@@ -59,13 +53,6 @@ class LighthouseExecutor(GraphExecutor):
         )
 
         return prompt.strip()
-
-    def register_db(self, source: DBDataSource) -> None:
-        """Register DB in the DuckDB connection."""
-        register_in_duckdb(self._duckdb_connection, source.config, source.name)
-
-    def register_df(self, source: DFDataSource) -> None:
-        self._duckdb_connection.register(source.name, source.df)
 
     def _get_compiled_graph(
         self, llm_config: LLMConfig, agent_config: AgentConfig, domain: Domain

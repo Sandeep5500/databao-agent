@@ -1,11 +1,13 @@
 from pathlib import Path
-from typing import cast
+from typing import TextIO, cast
 
 from databao.caches.in_mem_cache import InMemCache
 from databao.configs.agent import DEFAULT_AGENT_CONFIG, AgentConfig
 from databao.configs.llm import LLMConfig, LLMConfigDirectory
 from databao.core import Agent, Cache, Executor, Visualizer
 from databao.core.domain import Domain, _Domain, _InMemoryDomain, _PersistentDomain
+from databao.executors.dbt.config import DbtConfig
+from databao.executors.dbt.executor import DbtProjectExecutor
 from databao.executors.lighthouse.executor import LighthouseExecutor
 from databao.visualizers.vega_chat import VegaChatVisualizer
 
@@ -23,6 +25,9 @@ def agent(
     stream_plot: bool = False,
     lazy_threads: bool = False,
     auto_output_modality: bool = True,
+    writer: TextIO | None = None,
+    executor_type: str = "lighthouse",
+    dbt_config: DbtConfig | None = None,
 ) -> Agent:
     """This is an entry point for users to create a new agent.
     Agent can't be modified after it's created. Only new data sources can be added.
@@ -30,7 +35,18 @@ def agent(
     domain = cast(_Domain, domain)
     llm_config = llm_config if llm_config else LLMConfigDirectory.DEFAULT
     agent_config = agent_config if agent_config else DEFAULT_AGENT_CONFIG
-    data_executor = data_executor or LighthouseExecutor()
+
+    # Create executor if not provided
+    if data_executor is None:
+        match executor_type:
+            case "lighthouse":
+                data_executor = LighthouseExecutor(writer=writer)
+            case "dbt":
+                if dbt_config is None:
+                    raise ValueError("dbt_config must be provided when executor_type='dbt'")
+                data_executor = DbtProjectExecutor(dbt_config=dbt_config, writer=writer)
+            case _:
+                raise ValueError(f"Invalid executor type: {executor_type}")
 
     return Agent(
         domain,

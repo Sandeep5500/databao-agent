@@ -3,7 +3,7 @@ from pathlib import Path
 from pandas import DataFrame
 
 from databao.core.data_source import DBDataSource, DFDataSource, Sources
-from databao.databases import DBConnectionConfig
+from databao.databases import DBConnectionConfig, is_connectable
 
 
 class SourcesManager:
@@ -12,7 +12,11 @@ class SourcesManager:
         self._is_finalized = False
 
     def add_db(
-        self, config: DBConnectionConfig, *, name: str | None = None, context: str | Path | None = None
+        self,
+        config: DBConnectionConfig,
+        *,
+        name: str | None = None,
+        context: str | Path | None = None,
     ) -> DBDataSource | None:
         for db in self._sources.dbs.values():
             if db.config == config:
@@ -23,7 +27,12 @@ class SourcesManager:
 
         context_text = self._parse_context_arg(context) or ""
 
-        source = DBDataSource(name=name, context=context_text, config=config)
+        source = DBDataSource(
+            name=name,
+            context=context_text,
+            config=config,
+            connectable=is_connectable(config.type),
+        )
         self._sources.dbs[name] = source
         return source
 

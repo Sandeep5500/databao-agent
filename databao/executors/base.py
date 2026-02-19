@@ -1,19 +1,18 @@
+import logging
 from abc import ABC
 from typing import Any, TextIO
 
+import duckdb
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from databao.core import Cache
+from databao.core.data_source import DBDataSource, DFDataSource
 from databao.core.executor import ExecutionResult, Executor, OutputModalityHints
 from databao.core.opa import Opa
+from databao.databases import register_in_duckdb
 from databao.executors.frontend.text_frontend import TextStreamFrontend
-
-try:
-    from duckdb import DuckDBPyConnection
-except ImportError:
-    DuckDBPyConnection = Any  # type: ignore
 
 
 class GraphExecutor(Executor, ABC):
@@ -22,9 +21,39 @@ class GraphExecutor(Executor, ABC):
     Provides common functionality for graph caching, message handling, and OPA processing.
     """
 
-    def __init__(self) -> None:
-        """Initialize agent with graph caching infrastructure."""
+    def __init__(self, writer: TextIO | None = None) -> None:
+        """Initialize agent with graph caching infrastructure.
+
+        Args:
+            writer: Optional TextIO for streaming output. If provided, streaming
+                    output will be written to this writer instead of stdout.
+        """
         self._graph_recursion_limit = 50
+        self._writer = writer
+        self._duckdb_connection: duckdb.DuckDBPyConnection = duckdb.connect(":memory:")
+        self._attached_db_paths: dict[str, str] = {}
+        self._registered_dfs: dict[str, Any] = {}
+
+    def register_db(self, source: DBDataSource) -> None:
+        """Register a database source into the shared DuckDB connection."""
+        if not source.connectable:
+            logging.getLogger(__name__).debug(
+                "Skipping non-connectable datasource '%s'",
+                source.name,
+            )
+            return
+
+        register_in_duckdb(self._duckdb_connection, source.config, source.name)
+        db_path = source.config.content.get("database_path")
+        if db_path is None:
+            db_path = source.config.content.get("connection", {}).get("database_path")
+        if db_path is not None:
+            self._attached_db_paths[source.name] = db_path
+
+    def register_df(self, source: DFDataSource) -> None:
+        """Register a DataFrame source into the shared DuckDB connection."""
+        self._registered_dfs[source.name] = source.df
+        self._duckdb_connection.register(source.name, source.df)
 
     def _process_opas(self, opas: list[Opa], cache: Cache) -> list[Any]:
         """
