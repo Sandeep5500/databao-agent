@@ -25,9 +25,55 @@ Today's date is: {{ date }} (YYYY-MM-DD).
     - Time series require visualization
 - The user will see only the submitted result - final SQL and DataFrame. The user will not see intermediate results
 - Use less than {{ tool_limit }} tool calls before submitting the result
-
+{% if dce_search_enabled -%}
+- Remember to use the search_context tool to find relevant context (e.g., table and column descriptions) before writing your final SQL query.
+{% endif %}
 
 # Database schema
+{% if db_types -%}
+## Attached Databases
+
+Here is a list of "name": "type" pairs of all databases attached to your DuckDB instance.
+
+{% for name, db_type in db_types.items() -%}
+  - "{{ name }}": {{ db_type }}
+{% endfor %}
+
+{% if "snowflake" in db_types.values() -%}
+### Snowflake instructions
+
+When querying from Snowflake datasources, you must use the `snowflake_query()` function, like so:
+```sql
+SELECT *
+FROM snowflake_query(
+  'YOUR SQL',
+  'DATASOURCE_NAME'
+);
+```
+
+#### Snowflake identifier quoting rules
+
+**1. Unquoted Identifiers (Default Behavior)**
+- **Resolution:** Snowflake converts all unquoted identifiers to **UPPERCASE**.
+- *Example:* `select column_a from table_b` is resolved as `SELECT COLUMN_A FROM TABLE_B`.
+- **Instruction:** Always quote identifiers exactly as they are provided to you in the Database schema section and according to the rules in the next section.
+
+**2. Double-Quoted Identifiers (`" "`)**
+- **Resolution:** Snowflake treats content inside double quotes as **Case-Sensitive** and preserves it exactly as written.
+- *Example:* `SELECT "Column_A" FROM "Table_b"` looks for exactly `Column_A` inside `Table_b`.
+- **Mandatory Usage:** You **must** double-quote identifiers if they:
+  - Contain any **lowercase** characters (and the schema relies on mixed/lowercase).
+  - Contain **spaces** or **non-alphanumeric** characters (e.g., `.`, `-`, `@`, `%`).
+  - Start with a **digit**.
+  - Match a **reserved keyword** (e.g., `"GROUP"`, `"order"`).
+
+**3. Escaping Quotes**
+- **Syntax:** If the identifier name itself contains a double quote, escape it by using **two double quotes**.
+- *Example:* To query a table named `Client"Data`, write: `SELECT * FROM "Client""Data"`
+{% endif %}
+{% endif %}
+
+## Full Database schema
 {{ db_schema }}
 
 

@@ -7,6 +7,7 @@ from databao.configs import LLMConfig
 from databao.configs.agent import AgentConfig
 from databao.core import Cache, Domain, ExecutionResult, Opa
 from databao.core.domain import _Domain
+from databao.databases.databases import db_type
 from databao.duckdb.utils import describe_duckdb_schema
 from databao.executors.base import GraphExecutor
 from databao.executors.lighthouse.graph import ExecuteSubmit
@@ -19,6 +20,8 @@ class LighthouseExecutor(GraphExecutor):
         self._prompt_template = load_prompt_template("databao.executors.lighthouse", "system_prompt.jinja")
         self._graph: ExecuteSubmit = ExecuteSubmit(self._duckdb_connection)
 
+        self._max_columns_per_table: int | None = None
+
     def render_system_prompt(
         self,
         data_connection: Any,
@@ -26,17 +29,42 @@ class LighthouseExecutor(GraphExecutor):
         recursion_limit: int = 50,
     ) -> str:
         """Render system prompt with database schema."""
-        db_schema = describe_duckdb_schema(data_connection)
-
         domain = cast(_Domain, domain)
+
+        # As a workaround for snowflake where we execute queries directly using `snowflake_query`
+        # we need the original catalog name for the agent to write correct queries.
+        # For normal duckdb based execution, we instead need the "new" catalog name
+        # which is the user provided name of the attached datasource.
+        need_original_catalog_name = False
+
+        db_types = {}
+        for name, source in domain.sources.dbs.items():
+            db_type_ = db_type(source.config).full_type
+            db_types[name] = db_type_
+            if db_type_ == "snowflake":
+                need_original_catalog_name = True
+
+        db_schema = describe_duckdb_schema(
+            data_connection,
+            max_cols_per_table=self._max_columns_per_table,
+            include_original_catalog_name=need_original_catalog_name,
+        )
+
         sources = domain.sources
         context_text = build_context_text(
             sources,
             df_label_fn=lambda name: f"DF {name} (fully qualified name 'temp.main.{name}')",
         )
 
+        dce_search_enabled = self._graph.has_search_context_tool(domain)
+
         prompt = self._prompt_template.render(
-            date=get_today_date_str(), db_schema=db_schema, context=context_text, tool_limit=recursion_limit // 2
+            date=get_today_date_str(),
+            db_schema=db_schema,
+            context=context_text,
+            tool_limit=recursion_limit // 2,
+            db_types=db_types,
+            dce_search_enabled=dce_search_enabled,
         )
 
         return prompt.strip()
