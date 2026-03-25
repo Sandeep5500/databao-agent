@@ -11,6 +11,7 @@ from databao.agent.core.domain import _Domain
 from databao.agent.databases.databases import db_type as get_db_type
 from databao.agent.executors.base import DuckDBExecutor
 from databao.agent.executors.claude_code.claude_model_wrapper import ClaudeModelWrapper
+from databao.agent.executors.claude_code.utils import is_dce_search_enabled
 from databao.agent.executors.lighthouse.executor import LighthouseExecutor
 from databao.agent.executors.prompt import build_context_text, get_today_date_str, load_prompt_template
 
@@ -59,15 +60,13 @@ class ClaudeCodeExecutor(DuckDBExecutor):
             df_label_fn=lambda name: f"DF {name} (fully qualified name 'temp.main.{name}')",
         )
 
-        dce_search_enabled = False
-
         prompt = self._prompt_template.render(
             date=get_today_date_str(),
             db_schema=db_schema,
             context=context_text,
             tool_limit=recursion_limit // 2,
             db_types=db_types,
-            dce_search_enabled=dce_search_enabled,
+            dce_search_enabled=is_dce_search_enabled(domain),
         )
 
         return prompt.strip()
@@ -106,6 +105,7 @@ class ClaudeCodeExecutor(DuckDBExecutor):
             session_id=claude_session_id,
             limit_max_rows=rows_limit,
             max_turns=agent_config.recursion_limit,
+            domain=domain,
         ) as agent:
             user_messages: str = self._process_opas(opas)
             execution_result, claude_session_id = agent.ask(user_messages, stream=stream, writer=writer)

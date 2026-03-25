@@ -24,12 +24,17 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from mcp.types import ToolAnnotations
 
 from databao.agent.configs.llm import LLMConfig
+from databao.agent.core import Domain
 from databao.agent.core.executor import ExecutionResult
-from databao.agent.executors.claude_code.utils import cast_claude_message_to_langchain_message
+from databao.agent.executors.claude_code.utils import cast_claude_message_to_langchain_message, is_dce_search_enabled
 from databao.agent.executors.frontend.messages import get_tool_call
 from databao.agent.executors.frontend.text_frontend import TextStreamFrontend
+from databao.agent.executors.langchain_tools import SEARCH_CONTEXT_TOOL_DESCRIPTION
 from databao.agent.executors.lighthouse.graph import RUN_SQL_QUERY_TOOL_DESCRIPTION
 from databao.agent.executors.utils import run_sql_query
+from databao.agent.executors.utils import (
+    search_context as _search_context,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,20 +52,20 @@ class ClaudeModelWrapper:
     DISPLAY_CELL_CHAR_LIMIT = 1024
     """Max number of characters a dataframe cell can have before it is trimmed."""
 
-    __runtime_mcp_server: McpSdkServerConfig | None = None
-
     def __init__(
         self,
         *,
         config: LLMConfig,
         connection: DuckDBPyConnection,
         system_prompt: str,
+        domain: Domain,
         append_system_prompt: bool = False,
         session_id: str | None = None,
         limit_max_rows: int | None = None,
         max_turns: int | None = 100,
     ):
         self._duckdb_connection = connection
+        self._domain = domain
         self._limit_max_rows = limit_max_rows
         self.config = config
         self.sdk_mcp_tools = self._build_tools()
@@ -128,7 +133,8 @@ class ClaudeModelWrapper:
             annotations=ToolAnnotations(readOnlyHint=True),
         )
         async def _run_sql_query(args: dict[str, Any]) -> dict[str, Any]:
-            result = run_sql_query(
+            result = await asyncio.to_thread(
+                run_sql_query,
                 args.get("sql", ""),
                 con=self._duckdb_connection,
                 sql_row_limit=self._limit_max_rows,
@@ -174,17 +180,39 @@ query_id: The ID of the query to submit.""",
 
         tools.append(submit_query_id)
 
+        if is_dce_search_enabled(self._domain):
+
+            @tool(
+                "search_context",
+                SEARCH_CONTEXT_TOOL_DESCRIPTION,
+                {"retrieve_text": str},
+                annotations=ToolAnnotations(readOnlyHint=True),
+            )
+            async def search_context(args: dict[str, Any]) -> dict[str, Any]:
+                if retrieve_text := args.get("retrieve_text", ""):
+                    dce_output = await asyncio.to_thread(_search_context, retrieve_text, domain=self._domain)  # type: ignore[arg-type]
+                    return {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(dce_output),
+                            }
+                        ]
+                    }
+                return {"content": [{"type": "text", "text": json.dumps({"error": "No retrieve text provided"})}]}
+
+            tools.append(search_context)
+        else:
+            raise ValueError(f"Search context tool is not supported for domain type: {type(self._domain)}")
+
         return tools
 
     def _build_tool_server(self) -> McpSdkServerConfig:
-        tools = self._build_tools()
-        if self.__runtime_mcp_server is None:
-            self.__runtime_mcp_server = create_sdk_mcp_server(
-                name=self._tool_server_name,
-                version="1.0.0",
-                tools=tools,
-            )
-        return self.__runtime_mcp_server
+        return create_sdk_mcp_server(
+            name=self._tool_server_name,
+            version="1.0.0",
+            tools=self.sdk_mcp_tools,
+        )
 
     def _check_mcp_tool_availability(self, first_message: ClaudeMessage) -> None:
         """
