@@ -117,6 +117,7 @@ class LighthouseExecutor(GraphExecutor):
         data_connection: DuckDBPyConnection,
         domain: Domain,
         recursion_limit: int = 50,
+        min_retrievals: int = 0,
     ) -> str:
         """Render system prompt with database schema."""
         domain = cast(_Domain, domain)
@@ -148,6 +149,7 @@ class LighthouseExecutor(GraphExecutor):
             tool_limit=recursion_limit // 2,
             db_types=db_types,
             dce_search_enabled=dce_search_enabled,
+            min_retrievals=min_retrievals,
         )
 
         return prompt.strip()
@@ -170,7 +172,7 @@ class LighthouseExecutor(GraphExecutor):
         writer: TextIO | None = None,
     ) -> ExecutionResult:
         self._init_sources_from_domain(domain)
-        system_prompt = self.render_system_prompt(self._duckdb_connection, domain, agent_config.recursion_limit)
+        system_prompt = self.render_system_prompt(self._duckdb_connection, domain, agent_config.recursion_limit, agent_config.min_retrievals)
         init_state = self._graph.init_state([], limit_max_rows=rows_limit)
 
         execution_result, _ = self._execute_core(

@@ -7,6 +7,9 @@ class AgentConfig(BaseModel):
     recursion_limit: int = 50
     """Maximum recursion depth for LLM agent execution."""
 
+    min_retrievals: int = 0
+    """Minimum number of search_context calls the agent must make before submitting."""
+
     parallel_tool_calls: bool = True
     """Whether agent is allowed to call several tools in one response.
     Supported by OpenAI models only."""
