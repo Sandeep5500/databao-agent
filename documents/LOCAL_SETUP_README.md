@@ -8,7 +8,7 @@ served via vLLM for the Spider 2.0 benchmark.
 ## Architecture Overview
 
 ```
-[login node]                        [compute node — A6000 GPU]
+[login node]                        [compute node — A100 80GB GPU]
   fast_embed_server (port 11434)       vLLM server (port 8765)
   benchmark runner  ─────────────────────────────────────────→  OpenAI-compatible API
 ```
@@ -27,13 +27,18 @@ Three independent components must all be running for the benchmark to work:
 
 ```bash
 # 1. Start embed server (login node — must be running before benchmark)
-cd /data/user_data/<user>/personal/capstone/databao-context-engine
+cd /data/user_data/<user>/personal/nl2sql-databao/databao-context-engine
 nohup uv run python ../scripts/fast_embed_server.py --port 11434 \
   > /tmp/fast_embed_login.log 2>&1 &
 curl -s http://localhost:11434/api/tags   # verify: returns nomic-embed-text model
 
+# IMPORTANT: ensure no broken `ollama` stub shadows DCE's HTTP path. DCE calls
+# shutil.which("ollama") as a fallback and will try to subprocess-launch it,
+# silently breaking search_context if the binary is a stub.
+which ollama || true   # should be empty, or a real ollama binary
+
 # 2. Submit vLLM SLURM job (GLM-4.7-Flash-AWQ is the default)
-cd /data/user_data/<user>/personal/capstone
+cd /data/user_data/<user>/personal/nl2sql-databao
 sbatch scripts/serve_vllm.slurm
 
 # Watch until "Application startup complete" (~8 minutes):
@@ -69,18 +74,20 @@ PYTHONUNBUFFERED=1 nohup uv run python -u ../scripts/spider2_benchmark.py \
 HuggingFace ID:  QuantTrio/GLM-4.7-Flash-AWQ
 Architecture:    GLM-4.7-Flash — 30B-A3B MoE (30B total, 3B active per token)
 Quantization:    INT4 AWQ
-VRAM:            ~17 GB (fits on single A6000 48GB)
-Context window:  40960 tokens (capped to 28000 due to A6000 KV cache constraint)
+VRAM:            ~17 GB weights (runs on A100 80GB with ~57 GiB free for KV cache)
+Context window:  40960 tokens (we run at 60000 — see note below)
 Tool calling:    glm47 parser (vLLM >= 0.18.1)
 Thinking:        Yes — generates <think>...</think> blocks, but does not interfere
                  with tool call parsing (tool calls still use finish_reason=tool_calls)
 ```
 
-### Why max_model_len=28000 (not 40960)?
+### Why max_model_len=60000 (was 28000 on A6000)
 
-GLM at 40960 tokens requires ~36.7 GiB of KV cache. A6000 nodes only have ~26 GiB
-available after model weights (~17 GiB) and CUDA overhead. Setting
-`--max-model-len 28000` keeps KV cache requirements within budget.
+On A6000 (48 GiB) we were forced down to 28K because GLM weights (~17 GiB) +
+CUDA overhead leave only ~26 GiB for KV cache, and 40960 tokens of KV cache
+needs ~36.7 GiB. On A100 80GB the same model has ~57 GiB free for KV cache,
+so we run at `--max-model-len 60000` and remove the tight context budget that
+forced us to aggressively truncate schemas, knowledge docs, and `max_tokens`.
 
 ### Switching to Qwen3-32B-AWQ (recommended fallback)
 
@@ -100,28 +107,27 @@ The SLURM script auto-detects the model name and adjusts the tool-call parser
 **Key settings:**
 ```bash
 #SBATCH --partition=general
-#SBATCH --gres=gpu:A6000:1
+#SBATCH --gres=gpu:A100_80GB:1
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=8
 #SBATCH --time=12:00:00
-#SBATCH --exclude=babel-s9-28    # hardware bus error on this node — excluded
 ```
 
 **Configurable env vars (override at submission):**
 ```bash
 MODEL=QuantTrio/GLM-4.7-Flash-AWQ  # default
 VLLM_PORT=8765                      # default
-MAX_MODEL_LEN=28000                 # default — GLM KV cache limit on A6000
+MAX_MODEL_LEN=60000                 # default — fits in A100 80GB KV cache
 ```
 
 **Critical GLM-specific settings baked into the script:**
 
 | Setting | Value | Why |
 |---------|-------|-----|
-| `VLLM_MLA_DISABLE=1` | env var before launch | Disables TRITON_MLA backend; forces FLASH_ATTN. TRITON_MLA causes bus errors on A6000 nodes with GLM's MLA attention. |
+| `VLLM_MLA_DISABLE=1` | env var before launch | Disables TRITON_MLA backend; forces FLASH_ATTN. TRITON_MLA caused bus errors on A6000 with GLM's MLA attention; we keep it set on A100 too because TRITON_MLA still has occasional issues. |
 | `--quantization awq` | not `awq_marlin` | `awq_marlin` kernel causes bus errors with the `glm4_moe_lite` architecture in vLLM 0.18.1. |
-| `--dtype float16` | not `auto` | AWQ quantization requires float16. vLLM defaults to bfloat16 on A6000, causing a validation error at startup. |
-| `--enforce-eager` | flag | Disables CUDA graph capture, avoiding OOM during warmup on A6000. |
+| `--dtype float16` | not `auto` | AWQ quantization requires float16. vLLM defaults to bfloat16, causing a validation error at startup. |
+| `--enforce-eager` | flag | Disables CUDA graph capture, avoiding OOM during warmup. |
 | `--gpu-memory-utilization 0.92` | not 0.95 | Leaves headroom for GLM's larger KV cache. |
 
 **Why `$VENV_PYTHON` instead of `uv run python`:**
@@ -141,12 +147,12 @@ requires `regex>=2025.10.22`. Using `$VENV_PYTHON` skips the lockfile sync.
 
 | Parameter | Value | Why |
 |-----------|-------|-----|
-| `max_tokens` | 1024 | GLM context is 28000. Reducing from 2048 frees 1024 tokens, preventing overflow on questions with large external knowledge docs. SQL rarely exceeds 500 tokens. |
+| `max_tokens` | 4096 | A100 context is 60000, so we no longer need to starve `max_tokens`. Lifted from 1024 (the A6000 setting) because GLM's verbose pre-tool-call reasoning was being truncated mid-thought, causing the final assistant turn to land with empty `tool_calls` and the agent to terminate without emitting SQL. |
 | `recursion_limit` | 12 (AgentConfig) | Caps agent loops at 12 steps. Maps to 24 LangGraph nodes (2 per step). |
 | `_graph_recursion_limit` | 24 (executor) | Must be set alongside `recursion_limit`. `base.py` uses `max(self._graph_recursion_limit, agent_config.recursion_limit)` — default is 50, overriding AgentConfig. |
 | `min_retrievals` | 1 | Agent must call `search_context` at least once per question. |
-| `_max_schema_summary_length` | 60,000 chars | ~15K tokens. Triggers 3-tier schema fallback for large DBs (E_commerce, Baseball) to prevent schema overflow. |
-| External knowledge truncation | 20,000 chars | ~5K tokens. Prevents haversine_formula.md and similar long docs from overflowing 28K context. |
+| `_max_schema_summary_length` | 60,000 chars | ~15K tokens. Triggers 3-tier schema fallback for the largest DBs (E_commerce, Baseball). On A100 the context is no longer the bottleneck, but the fallback still keeps single-turn input reasonable. |
+| External knowledge truncation | 20,000 chars | ~5K tokens. Cap on per-question external knowledge docs (e.g. haversine_formula.md). Now generous relative to the 60K window. |
 
 **Schema compression (3-tier fallback):**
 
@@ -212,11 +218,11 @@ Best areas: `chinook` (2/3), `Baseball` (1/2), `IPL` (2/11).
 `Bus error (core dumped)` on the first request.
 
 **Root cause (GLM-specific):** GLM-4.7-Flash uses Multi-head Latent Attention (MLA),
-which vLLM routes to the `TRITON_MLA` backend by default. This backend causes hardware
-bus errors on A6000 nodes.
+which vLLM routes to the `TRITON_MLA` backend by default. This backend caused hardware
+bus errors on A6000 nodes and has occasional issues elsewhere.
 
 **Fix:** Set `VLLM_MLA_DISABLE=1` before launching vLLM. This forces `FLASH_ATTN`
-instead of `TRITON_MLA`. Already set in `serve_vllm.slurm`.
+instead of `TRITON_MLA`. Already set in `serve_vllm.slurm` for both A6000 and A100.
 
 ```bash
 # Verify the fix is active — look for this line in vllm_<jobid>.err:
@@ -246,7 +252,7 @@ ImportError: regex>=2025.10.22 is required for a normal functioning of this modu
 
 **Manual fix if needed:**
 ```bash
-cd /data/user_data/<user>/personal/capstone/databao-agent
+cd /data/user_data/<user>/personal/nl2sql-databao/databao-agent
 uv pip install --python .venv/bin/python "regex==2026.4.4" --no-deps
 .venv/bin/python -c "import transformers; print(transformers.__version__)"
 # Expected: 5.6.0.dev0
@@ -256,18 +262,19 @@ uv pip install --python .venv/bin/python "regex==2026.4.4" --no-deps
 
 **Symptom:**
 ```
-Error code: 400 - maximum context length is 28000 tokens. However, you requested
-1024 output tokens and your prompt contains at least XXXXX input tokens
+Error code: 400 - maximum context length is N tokens. However, you requested
+M output tokens and your prompt contains at least XXXXX input tokens
 ```
 
-**Cause:** Question uses a large external knowledge doc + large schema. Airlines
-questions (local009, local010) use `haversine_formula.md`; the schema + doc + history
-exceeds 27,000 input tokens.
+**Cause:** Question uses a large external knowledge doc + large schema. Mostly
+historical on A6000 (28K cap). On A100 80GB at `MAX_MODEL_LEN=60000` this only
+triggers in extreme cases.
 
 **Fix options:**
-- Reduce `max_tokens` further (currently 1024)
-- Reduce `_max_schema_summary_length` below 60,000 chars
-- Reduce external knowledge truncation below 20,000 chars
+- Bump `MAX_MODEL_LEN` (only safe up to where KV cache still fits in GPU memory)
+- Lower `max_tokens` in `spider2_benchmark.py`
+- Lower `_max_schema_summary_length` to force more aggressive schema compression
+- Lower external knowledge truncation
 
 ### Agent Loops (Recursion Limit)
 
@@ -284,17 +291,33 @@ executor = LighthouseExecutor()
 executor._graph_recursion_limit = 24  # must match recursion_limit × 2
 ```
 
-### fast_embed_server Not Running
+### fast_embed_server Not Running (or `search_context` silently broken)
 
-**Symptom:** `search_context` fails or the agent never retrieves schema context.
+**Symptom:** `search_context` fails, returns empty context, or the agent
+never retrieves schema context. In traces you may see
+`OSError: [Errno 8] Exec format error: '<...>/ollama'`.
+
+**Two independent root causes** — both must be ruled out:
+
+1. The HTTP embed server on `localhost:11434` is dead.
+2. There is a *broken* `ollama` binary on `$PATH` (e.g. a 9-byte stub left
+   over from a failed curl install). DCE's `OllamaRuntime` falls back to
+   `subprocess.Popen([shutil.which("ollama"), "serve"])` if the HTTP path is
+   unhealthy, and a stub binary will silently break retrieval for the
+   entire run without raising at startup.
 
 **Fix:**
 ```bash
-# Check
+# 1. Check the embed server
 curl -s http://localhost:11434/api/tags
 
-# Restart
-cd /data/user_data/<user>/personal/capstone/databao-context-engine
+# 2. Check there's no broken ollama stub on PATH
+which ollama && file "$(which ollama)"
+# If it's tiny / not an ELF executable, move it aside:
+#   mv "$(which ollama)" "$(which ollama).broken_stub.bak"
+
+# 3. Restart the embed server
+cd /data/user_data/<user>/personal/nl2sql-databao/databao-context-engine
 nohup uv run python ../scripts/fast_embed_server.py --port 11434 \
   > /tmp/fast_embed_login.log 2>&1 &
 sleep 30
@@ -324,9 +347,9 @@ curl -s http://$(cat logs/vllm_endpoint.txt | head -1 | awk '{print $1}')/v1/mod
 ## File Reference
 
 ```
-capstone/
+nl2sql-databao/
 ├── scripts/
-│   ├── serve_vllm.slurm          # SLURM: launches vLLM on A6000 GPU node
+│   ├── serve_vllm.slurm          # SLURM: launches vLLM on A100 80GB GPU node
 │   ├── spider2_benchmark.py      # Benchmark runner for Spider 2.0 local SQLite track
 │   ├── fast_embed_server.py      # Embedding server for search_context tool
 │   └── enrich_dce.py             # Builds DCE vector index (one-time setup)
