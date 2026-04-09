@@ -71,14 +71,26 @@ class Thread:
         self._writer = writer
 
     def _materialize_data(self, rows_limit: int | None) -> "ExecutionResult":
-        """Materialize the latest data state by executing pending OPAs if needed."""
+        """Materialize the latest data state by executing pending OPAs if needed.
+
+        The opa-processed counter is bumped in ``finally`` so that a subsequent
+        ``meta()`` / trace dump never re-executes the graph after a failure.  When
+        execution raises, we synthesize ``_data_result`` from messages the executor
+        already persisted to the cache (the real failing run's messages), then
+        re-raise the original exception.
+        """
         new_opas = self._opas[self._opas_processed_count :]
-        if len(new_opas) > 0:
-            rows_limit = rows_limit if rows_limit else self._default_rows_limit
-            stream = self._stream_ask if self._stream_ask is not None else self._default_stream_ask
-            executor = self._agent.executor
-            domain = self._agent.domain
-            executor.prepare_for_execution(domain)
+        if len(new_opas) <= 0:
+            if self._data_result is None:
+                raise RuntimeError("_data_result is None after materialization")
+            return self._data_result
+
+        rows_limit = rows_limit if rows_limit else self._default_rows_limit
+        stream = self._stream_ask if self._stream_ask is not None else self._default_stream_ask
+        executor = self._agent.executor
+        domain = self._agent.domain
+        executor.prepare_for_execution(domain)
+        try:
             for opa in new_opas:
                 self._data_result = executor.execute(
                     opa,
@@ -91,10 +103,28 @@ class Thread:
                     writer=self._writer,
                 )
                 self._meta.update(self._data_result.meta)
+        finally:
+            # Bump the counter regardless of success so subsequent meta() calls do
+            # NOT re-invoke the graph (which would overwrite the real failing trace).
             self._opas_processed_count += len(new_opas)
             self._data_materialized_rows = rows_limit
-        if self._data_result is None:
-            raise RuntimeError("_data_result is None after materialization")
+            # On failure, synthesize a minimal ExecutionResult from whatever messages
+            # the executor managed to persist to the cache before the exception.
+            if self._data_result is None:
+                cached_msgs = (
+                    self._agent.cache.scoped(self._cache_scope).get("state", {}).get("messages", [])
+                )
+                self._data_result = ExecutionResult(
+                    text="",
+                    df=None,
+                    code="",
+                    meta={
+                        ExecutionResult.META_MESSAGES_KEY: cached_msgs,
+                        "submit_called": False,
+                        "failed": True,
+                    },
+                )
+                self._meta.update(self._data_result.meta)
         return self._data_result
 
     def _collect_user_questions_from_cache(self) -> list[str]:

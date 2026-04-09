@@ -192,9 +192,29 @@ class GraphExecutor(DuckDBExecutor, ABC):
             init_state = {**init_state, "messages": cleaned_messages}
 
         invoke_config = self._build_invoke_config(agent_config, opas)
-        last_state = self._invoke_graph_sync(
-            compiled_graph, init_state, config=invoke_config, stream=stream, writer=writer or self._writer
-        )
+        try:
+            last_state = self._invoke_graph_sync(
+                compiled_graph, init_state, config=invoke_config, stream=stream, writer=writer or self._writer
+            )
+        except BaseException as e:
+            # Persist the real failing run's messages BEFORE re-raising so that any
+            # subsequent ``thread.meta()`` / trace dump observes the actual failing
+            # trajectory — not a re-execution.  The partial state was attached by
+            # _invoke_graph_sync at the most recent complete ``values`` chunk.
+            partial = getattr(e, "_partial_last_state", None)
+            if partial is not None:
+                try:
+                    _, all_messages_partial = self._reconcile_messages(
+                        all_messages_with_system, cleaned_messages, partial
+                    )
+                    if all_messages_partial:
+                        all_without_system_partial = [
+                            m for m in all_messages_partial if m.type != "system"
+                        ]
+                        self._update_message_history(cache, all_without_system_partial)
+                except Exception as persist_err:
+                    logger.warning("Failed to persist partial messages on graph failure: %s", persist_err)
+            raise
 
         execution_result = get_result(last_state)
 
@@ -301,13 +321,36 @@ class GraphExecutor(DuckDBExecutor, ABC):
         writer: TextIO | None = None,
         **kwargs: Any,
     ) -> Any:
-        """Invoke the graph with the given start state and return the output state."""
+        """Invoke the graph with the given start state and return the output state.
+
+        Both stream and non-stream paths iterate via ``compiled_graph.stream`` so that
+        when the graph raises (e.g. GraphRecursionError) we can still capture the most
+        recent complete ``values`` chunk and attach it to the exception as
+        ``_partial_last_state``.  Upstream handlers can then persist the partial state
+        before re-raising, which preserves the real failing run's messages.
+        """
         if stream:
             return GraphExecutor._execute_stream_sync(
                 compiled_graph, start_state, config=config, writer=writer, **kwargs
             )
-        else:
-            return compiled_graph.invoke(start_state, config=config)
+
+        # Non-streaming: still iterate via stream() so we can capture last_state on failure.
+        last_state = None
+        try:
+            for mode, chunk in compiled_graph.stream(
+                start_state,
+                stream_mode=["values"],
+                config=config,
+                **kwargs,
+            ):
+                if mode == "values":
+                    last_state = chunk
+        except BaseException as e:
+            e._partial_last_state = last_state  # type: ignore[attr-defined]
+            raise
+        if last_state is None:
+            raise RuntimeError("Graph execution produced no output state")
+        return last_state
 
     @staticmethod
     async def _execute_stream(
@@ -345,15 +388,22 @@ class GraphExecutor(DuckDBExecutor, ABC):
     ) -> Any:
         frontend = TextStreamFrontend(start_state, writer=writer)
         last_state = None
-        for mode, chunk in compiled_graph.stream(
-            start_state,
-            stream_mode=["values", "messages"],
-            config=config,
-            **kwargs,
-        ):
-            frontend.write_stream_chunk(mode, chunk)
-            if mode == "values":
-                last_state = chunk
+        try:
+            for mode, chunk in compiled_graph.stream(
+                start_state,
+                stream_mode=["values", "messages"],
+                config=config,
+                **kwargs,
+            ):
+                frontend.write_stream_chunk(mode, chunk)
+                if mode == "values":
+                    last_state = chunk
+        except BaseException as e:
+            frontend.end()
+            # Attach the most recent complete state so upstream can persist the real
+            # failing run's messages before re-raising.
+            e._partial_last_state = last_state  # type: ignore[attr-defined]
+            raise
         frontend.end()
         if last_state is None:
             raise RuntimeError("Graph execution produced no output state")
